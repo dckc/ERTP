@@ -57,7 +57,7 @@ mutual
       -> Stmt
 
   GhostDecl: Type
-  GhostDecl = (FldId, (VecLen VarId, Expr))
+  GhostDecl = (FldId, (VMap VarId Expr))
 
   data Expr = True | False | Null
     | Var VarId | Eq Expr Expr
@@ -76,6 +76,8 @@ mutual
   record FldId where
     constructor FldI
     id: String
+  Eq FldId where
+    (FldI a) == (FldI b) = a == b
   record MethId where
     constructor MethI
     id: String
@@ -100,6 +102,14 @@ mutual
       Nothing => Nothing
     Nothing => Nothing
 
+  bigG: Module -> ClassId -> FldId -> Maybe GhostDecl
+  bigG mod cid gid =
+   case (vlookup cid mod) of
+    (Just (ClassDef _ _ _ gs)) =>
+     case (vlookup gid gs) of
+      (Just gdef) => Just (gid, gdef)
+      Nothing => Nothing
+    Nothing => Nothing
 
 {-
 
