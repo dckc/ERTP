@@ -112,6 +112,49 @@ mutual
     Nothing => Nothing
 
 {-
+DEFINITION 18 (RUNTIME ENTITIES). We define addresses, values, frames,
+stacks, heaps and runtime configurations.
+-}
+
+||| We take addresses to be an enumerable set, Addr, and use the
+||| identifier α ∈ Addr to indicate an address.
+data Addr = MkAddr Nat
+
+
+Set: Type -> Type
+Set a = a -> (Dec a)
+
+||| Values, v, are either addresses, or sets of addresses or null: v ∈
+||| {null} ∪ Addr ∪ P(Addr).
+data Value = ValAddr Addr | SetOfAddr (Set Addr) | ValNull
+
+||| Continuations are either statements (as defined in Definition 16)
+||| or a marker, x:= •, for a nested call followed by statements to be
+||| executed once the call returns.
+
+data Continuation = Cont Stmts | NestedCall VarId Stmts
+
+||| Frames, ϕ, consist of a code stub and a mapping from identifiers to values:
+data Frame = CodeStub (VMap VarId Value)
+
+||| Stacks, ψ, are sequences of frames, ψ ::= ϕ | ϕ · ψ.
+Stack: Type
+Stack = VecLen Frame
+
+||| Objects consist of a class identifier, and a partial mapping from
+||| field identifier to values:
+data Object = MkObj ClassId (VMap FldId Value)
+
+||| Heaps, χ, are mappings from addresses to objects:
+Heap: Type
+Heap = VMap Addr Object
+
+||| Runtime configurations, σ, are pairs of stacks and heaps,
+||| σ ::= ( ψ, χ ).-}
+Configuration: Type
+Configuration = (Stack, Heap)
+
+{-
 
 DEFINITION 1. Given runtime configurations σ, σ′, and a module-pair
 M#M′ we define execution where M is the internal, and M′ is the
@@ -123,7 +166,6 @@ Class(this)σ′ < dom(M), – Class(this)σi ∈ dom(M), for 2 ≤ i ≤ n−2
 -}
 
 
-data Configuration = Conf Nat {- @@@ -}
 
 data ModulePair: Type where
   Semi: (M: Module) -> (M': Module) -> ModulePair
