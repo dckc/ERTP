@@ -13,32 +13,41 @@ as classes, and modules are mappings from identifiers to class
 descriptions.
 -}
 
+VecLen: (a: Type) -> Type
+VecLen a = (n: Nat ** Vect n a)
+
+VMap: (k: Type) -> (v: Type) -> Type
+VMap k v = VecLen (k, v)
+
+vlookup: Eq k => k -> (VMap k v) -> (Maybe v)
+vlookup key (n ** pairs) = Vect.lookup {n=n} key pairs
+
 mutual
 
   ||| DEFINITION 15 (MODULES). We define Module as the set of mappings
   ||| from identifiers to class descriptions (the latter defined in
   |||
   ||| Module ≜ { M | M : Identifier −> ClassDescr }
-  Module: {nc, nf, nm, ng: Nat} -> Type
-  Module {nc} {nf} {nm} {ng} = Vect nc (ClassId, ClassDescr {nf=nf} {nm=nm} {ng=ng})
+  Module: Type
+  Module = VMap ClassId ClassDescr
 
   ||| DEFINITION 16 (CLASSES). Class descriptions consist of field
   ||| declarations, method declarations, and ghostfield declarations.
-  data ClassDescr: {nf, nm, ng: Nat} -> Type where
+  data ClassDescr: Type where
     ClassDef: ClassId
-              -> (Vect nf FieldDecl)
-              -> (Vect nm MethDecl)
-              -> (Vect ng GhostDecl)
+              -> (VecLen FieldDecl)
+              -> (VecLen MethDecl)
+              -> (VecLen GhostDecl)
               -> ClassDescr
  
   FieldDecl: Type
   FieldDecl = FldId
 
-  MethDecl: {np, ns: Nat} -> Type
-  MethDecl {np} {ns} = (MethId, (Vect np VarId, Stmts {ns=ns}))
+  MethDecl: Type
+  MethDecl = (MethId, (VecLen VarId, Stmts))
 
-  Stmts : {ns: Nat} -> Type
-  Stmts {ns} = Vect ns Stmt
+  Stmts : Type
+  Stmts = VecLen Stmt
 
   ||| x.f:= x | x:= x.f | x:= x.m( x ) | @@TODO x:= new C ( x∗ ) | return x
   data Stmt: Type where
@@ -48,7 +57,7 @@ mutual
       -> Stmt
 
   GhostDecl: Type
-  GhostDecl = (FldId, (List VarId, Expr))
+  GhostDecl = (FldId, (VecLen VarId, Expr))
 
   data Expr = True | False | Null
     | Var VarId | Eq Expr Expr
@@ -78,19 +87,15 @@ mutual
   Eq ClassId where
     (ClassI a) == (ClassI b) = a == b
 
-  lc: {nc, nf, nm, ng: Nat} -> (Module {nc=nc} {nf=nf} {nm=nm} {ng=ng}) -> ClassId -> Maybe (ClassDescr {nf=nf} {nm=nm} {ng=ng})
-  lc {nc} {nf} {nm} {ng} mod cid = Vect.lookup cid mod
+  lc: Module -> ClassId -> Maybe ClassDescr
+  lc mod cid = vlookup cid mod
 
   ||| lookup M(M, C, m)
-  bigM: {nc, nf, nm, ng, np, ns: Nat}
-        -> (Module {nc=nc} {nf=nf} {nm=nm} {ng=ng})
-        -> ClassId
-        -> MethId
-         -> Maybe (MethDecl {np=np} {ns=ns})
-  bigM {nc} {nf} {nm} {ng} {np} {ns} mod cid mid =
-   case (Vect.lookup {n=nc} cid mod) of
-    (Just (ClassDef {nm=nm} _ _ methods _)) =>
-     case (Vect.lookup {n=nm} mid methods) of
+  bigM: Module -> ClassId -> MethId -> Maybe MethDecl
+  bigM mod cid mid =
+   case (vlookup cid mod) of
+    (Just (ClassDef _ _ methods _)) =>
+     case (vlookup mid methods) of
       (Just mdef) => Just (mid, mdef)
       Nothing => Nothing
     Nothing => Nothing
