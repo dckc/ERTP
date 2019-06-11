@@ -24,6 +24,15 @@ VMap k v = VecLen (k, v)
 vlookup: Eq k => k -> (VMap k v) -> (Maybe v)
 vlookup key (n ** pairs) = Vect.lookup {n=n} key pairs
 
+infix 12 .@
+(.@): Eq k => (VMap k v) -> k -> (Maybe v)
+m .@ k = vlookup k m
+
+infix 11 $?
+($?): (Maybe a) -> (a -> Maybe b) -> (Maybe b)
+(Just a) $? f = f a
+Nothing $? f = Nothing
+
 mutual
 
   ||| DEFINITION 15 (MODULES). We define Module as the set of mappings
@@ -96,22 +105,16 @@ mutual
 
   ||| lookup M(M, C, m)
   bigM: Module -> ClassId -> MethId -> Maybe MethDecl
-  bigM mod cid mid =
-   case (vlookup cid mod) of
-    (Just (ClassDef _ _ methods _)) =>
-     case (vlookup mid methods) of
-      (Just mdef) => Just (mid, mdef)
-      Nothing => Nothing
-    Nothing => Nothing
+  bigM mod cid mid = mod .@ cid $?
+    \(ClassDef _ _ methods _) =>
+      methods .@ mid $?
+       \mdef => Just (mid, mdef)
 
   bigG: Module -> ClassId -> FldId -> Maybe GhostDecl
-  bigG mod cid gid =
-   case (vlookup cid mod) of
-    (Just (ClassDef _ _ _ gs)) =>
-     case (vlookup gid gs) of
-      (Just gdef) => Just (gid, gdef)
-      Nothing => Nothing
-    Nothing => Nothing
+  bigG mod cid gid = mod .@ cid $?
+    \(ClassDef _ _ _ gs) =>
+      gs .@ gid $?
+       \gdef => Just (gid, gdef)
 
 {-
 DEFINITION 18 (RUNTIME ENTITIES). We define addresses, values, frames,
@@ -165,44 +168,36 @@ Configuration = (Stack, Heap)
 {-
 DEFINITION 19 (INTERPRETATIONS). We first define lookup of fields and
 classes, where α is an address, and f is a field identifier:
-
-• χ (α, f) ≜ fldMap(α, f) if χ (α) = (_, fldMap).
-• Class(α)χ ≜ C if χ (α) = (C, _)
 -}
 
-interpField: Heap -> Addr -> FldId -> (Maybe Value)
-interpField chi alpha f =
-  case vlookup alpha chi of
-    Just (_, fldMap) => vlookup f fldMap
-    Nothing => Nothing
+infix 12 ..@
+||| χ (α, f) ≜ fldMap(α, f) if χ (α) = (_, fldMap).
+(..@): Heap -> (Addr, FldId) -> (Maybe Value)
+chi ..@ (a, f) = chi .@ a $? \(_, fldMap) => vlookup f fldMap
 
-interpClass: Heap -> Addr -> (Maybe ClassId)
-interpClass chi alpha =
-  case vlookup alpha chi of
-    Just (c, _) => Just c
-    Nothing => Nothing
+||| Class(α)χ ≜ C if χ (α) = (C, _)
+Class: Addr -> Heap -> (Maybe ClassId)
+Class alpha chi = chi .@ alpha $? \(c, _) => Just c
 
-{-
-We now define interpretations as follows:
 
-• ⌊x⌋ϕ ≜ ϕ(x)
-• ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
--}
-interpVar: Frame -> VarId -> (Maybe Value)
-interpVar (_, phi) x =
-  case vlookup x phi of
-    (Just v) => Just v
-    Nothing => Nothing
+infix 12 ..
+data FieldAccess = (..) VarId FldId
+infix 11 //
+infix 11 ///
+data VarInterp = VI VarId
+data Interp = (//) VarId Frame | (///) FieldAccess (Frame, Heap)
 
-interpFieldLookup: Frame -> Heap -> VarId -> FldId -> (Maybe Value)
-interpFieldLookup (_, phi) chi x f =
-  maybe_bind (vlookup x phi) (\v =>
+
+|||We now define interpretations as follows:
+||| ⌊x⌋ϕ ≜ ϕ(x)
+||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
+interp: Interp -> (Maybe Value)
+interp (x // (_, phi)) = phi .@ x
+interp ((x .. f) /// ((_, phi), chi)) =
+  phi .@ x $? \v =>
     case v of
-      (ValAddr a) =>maybe_bind (vlookup a chi) (\(_, fldMap) =>
-        maybe_bind (vlookup f fldMap) (\v => Just v)
-        )
+      (ValAddr a) => chi .@ a $? \(_, fldMap) => fldMap .@ f
       _ => Nothing
-    )
 
 {-
 
