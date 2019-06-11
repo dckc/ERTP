@@ -40,6 +40,7 @@ infix 12 ..
 
 {- where the paper uses M;M' , we use M#M' -}
 infix 7 ~>
+infix 7 ~>*
 infix 7 ~~>
 infix 11 #
 
@@ -208,6 +209,25 @@ interp ((x .. f) /// (phi, chi)) =
       (ValAddr a) => chi .@ a $? \(_, fldMap) => fldMap .@ f
       _ => Nothing
 
+{-
+
+DEFINITION 20 (LOOKUP AND UPDATE OF RUNTIME CONFIGURATIONS). We define
+convenient shorthands for looking up in runtime entities.
+
+• Assuming that φ is the tuple (stub,varMap), we use the notation φ.contn to obtain stub.
+
+• Assuming a value v, and that φ is the tuple (stub,varMap), we define
+φ[contn 􏰀→ stub’] for updating the stub, i.e. (stub’,varMap). We use
+φ[x 􏰀→ v] for updating the variable map, i.e. (stub,varMap[x 􏰀→ v]).
+
+• Assuming a heap χ, a value v, and that χ(α) = (C, fieldMap), we use
+χ[α,f 􏰀→ v] as a shorthand for updating the object, i.e. χ[α 􏰀→ (C, f
+ieldMap[f 􏰀→ v]].
+
+Execution of a statement has the form M, σ Y σ ′,
+and is defined in figure 6.
+
+-}
 pmap: {n: Nat}
       -> (p1n: (Vect n VarId)) -> (x1n: (Vect n VarId)) -> (phi: Frame) -> (Maybe (Vect n (VarId, Value)))
 pmap {n=Z} [] [] phi = Just []
@@ -240,6 +260,17 @@ data (~>): (Module, (Stack, Heap)) -> (Stack, Heap) -> Type where
      -> (pmap p1n x1n phi) = (Just m1n) -> phi'' = MkFrame (Cont stmts1) ((S n) ** (This, (ValAddr alpha)) :: m1n)
      -> (mm, (cons phi psi, chi)) ~> (newStack phi'' x stmts phi psi, chi)
 
+
+{-
+DEFINITION 21 (EXECUTION). of one or more steps is defined as follows:
+
+  • The relation M,σ Yσ′,itisdefinedinFigure6.
+
+  • M,σ Y∗ σ′ holds, if i) σ=σ′, or ii) there exists a σ′′ such that M,σ Y∗ σ′′ and M,σ′′ Y σ′.
+-}
+data (~>*): (Module, Configuration) -> Configuration -> Type where
+  Refl: (m, sigma) ~>* sigma
+  Trans: (m, sigma) ~>* sigma'' -> (m, sigma'') ~> sigma' -> (m, sigma) ~>* sigma'
 
 {-
 
