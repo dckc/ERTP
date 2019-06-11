@@ -18,6 +18,9 @@ descriptions.
 VecLen: (a: Type) -> Type
 VecLen a = (n: Nat ** Vect n a)
 
+cons: a -> (VecLen a) -> (VecLen a)
+cons a (n ** as) = ((S n) ** a :: as)
+
 VMap: (k: Type) -> (v: Type) -> Type
 VMap k v = VecLen (k, v)
 
@@ -68,7 +71,7 @@ mutual
   Stmts = VecLen Stmt
 
   data FieldAccess = (..) VarId FldId
-  data Call = MkCall VarId FldId (VecLen VarId)
+  data Call = MkCall VarId MethId (VecLen VarId)
 
   ||| x.f:= x | x:= x.f | x:= x.m( x* ) | x:= new C ( x∗ ) | return x
   data Stmt = SetField FieldAccess VarId
@@ -148,12 +151,10 @@ data Value = ValNull | ValAddr Addr | P (Set Addr)
 ||| executed once the call returns.
 data Continuation = Cont Stmts | NestedCall VarId Stmts
 
-data CodeStub {- @@ISSUE: where is this defined??? -}
-
 ||| Frames, ϕ, consist of a code stub and a mapping from identifiers to values:
 record Frame where
   constructor MkFrame
-  contn: CodeStub
+  contn: Continuation
   varMap: VMap VarId Value
 
 
@@ -207,26 +208,37 @@ interp ((x .. f) /// (phi, chi)) =
       (ValAddr a) => chi .@ a $? \(_, fldMap) => fldMap .@ f
       _ => Nothing
 
-{-
-Operational Semantics
+pmap: {n: Nat}
+      -> (p1n: (Vect n VarId)) -> (x1n: (Vect n VarId)) -> (phi: Frame) -> (Maybe (Vect n (VarId, Value)))
+pmap {n=Z} [] [] phi = Just []
+pmap {n=S k} (p1 :: p2n) (x1 :: x2n) phi =
+  case pmap {n=k} p2n x2n phi of
+    (Just m2n) => (interp (x1 // phi)) $? \v1 => Just ((p1, v1) :: m2n)
+    Nothing => Nothing
 
-methCall_OS
+newStack: Frame -> VarId -> Stmts -> Frame -> Stack -> Stack
+newStack phi'' x stmts f psi = cons phi'' (cons (set_contn (NestedCall x stmts) f) psi)
 
-ϕ.contn = x:= x0.m( x1, ...xn) ; Stmts
-⌊x0⌋ϕ = α
-M(M, Class(α)χ , m) = m( p1, . . . pn) { Stmts1}
-ϕ′′ = ( Stmts1, ( this 7→ α, p1 7→ ⌊x1⌋ϕ, . . . pn 7→ ⌊xn⌋ϕ ) )
----
-M, ( ϕ · ψ, χ ) ❀ ( ϕ′′ · ϕ[contn 7→ x:= • ; Stmts] · ψ, χ )
--}
-
+||| Operational Semantics
 data (~>): (Module, (Stack, Heap)) -> (Stack, Heap) -> Type where
+  ||| methCall_OS
+  ||| ϕ.contn = x:= x0.m( x1, ...xn) ; Stmts
+  ||| ⌊x0⌋ϕ = α
+  ||| M(M, Class(α)χ , m) = m( p1, . . . pn) { Stmts1}
+  ||| ϕ′′ = ( Stmts1, ( this 7→ α, p1 7→ ⌊x1⌋ϕ, . . . pn 7→ ⌊xn⌋ϕ ) )
+  ||| ---
+  ||| M, ( ϕ · ψ, χ ) ❀ ( ϕ′′ · ϕ[contn 7→ x:= • ; Stmts] · ψ, χ )
   MethCall_OS:
-     (m: Module)
-     -> (phi, phi'': Frame)
-     -> (ns: Nat) -> (psi: Vect ns Frame)
-     -> (chi: Heap)
-     -> (m, (((S ns) ** phi :: psi), chi)) ~> (((S ns) ** phi'' :: psi), chi)
+     {phi: Frame} -> {x, x0: VarId} -> {m: MethId} -> {n: Nat} -> {x1n: Vect n VarId} -> {stmts, stmts1: Stmts}
+     -> {alpha: Addr}
+     -> {mm: Module} -> {chi: Heap} -> {p1n: Vect n VarId} 
+     -> (phi'': Frame)
+     -> {psi: Stack}
+     -> (contn phi) = (Cont (cons (GetCall x (MkCall x0 m (n ** x1n))) stmts))
+     -> interp (x0 // phi) = Just (ValAddr alpha)
+     -> (Class alpha chi) = (Just cid) -> (bigM mm cid m) = Just (m, ((n ** p1n), stmts1))
+     -> (pmap p1n x1n phi) = (Just m1n) -> phi'' = MkFrame (Cont stmts1) ((S n) ** (This, (ValAddr alpha)) :: m1n)
+     -> (mm, (cons phi psi, chi)) ~> (newStack phi'' x stmts phi psi, chi)
 
 
 {-
@@ -262,6 +274,4 @@ data (~~>): ConfigInContext -> Configuration -> Type where
            {- @@@ -> ({i :Fin n} -> Vect.index i sigmas) -}
            -> m # m' / sigma ~~> sigma'
 
--- Local Variables:
--- idris-load-packages: ("contrib")
--- End:
+
