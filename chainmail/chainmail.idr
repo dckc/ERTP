@@ -2,6 +2,8 @@ module Chainmail
 
 import Data.Vect
 
+%default total
+
 {-
 A THE UNDERLYING PROGRAMMING LANGUAGE, Loo
 
@@ -119,14 +121,15 @@ stacks, heaps and runtime configurations.
 ||| We take addresses to be an enumerable set, Addr, and use the
 ||| identifier α ∈ Addr to indicate an address.
 data Addr = MkAddr Nat
-
+Eq Addr where
+  (MkAddr a) == (MkAddr b) = a == b
 
 Set: Type -> Type
 Set a = a -> (Dec a)
 
 ||| Values, v, are either addresses, or sets of addresses or null: v ∈
 ||| {null} ∪ Addr ∪ P(Addr).
-data Value = ValAddr Addr | SetOfAddr (Set Addr) | ValNull
+data Value = ValNull | ValAddr Addr | P (Set Addr)
 
 ||| Continuations are either statements (as defined in Definition 16)
 ||| or a marker, x:= •, for a nested call followed by statements to be
@@ -134,8 +137,12 @@ data Value = ValAddr Addr | SetOfAddr (Set Addr) | ValNull
 
 data Continuation = Cont Stmts | NestedCall VarId Stmts
 
+data CodeStub {- @@ISSUE: where is this defined??? -}
+
 ||| Frames, ϕ, consist of a code stub and a mapping from identifiers to values:
-data Frame = CodeStub (VMap VarId Value)
+Frame: Type
+Frame = (CodeStub, VMap VarId Value)
+
 
 ||| Stacks, ψ, are sequences of frames, ψ ::= ϕ | ϕ · ψ.
 Stack: Type
@@ -143,7 +150,8 @@ Stack = VecLen Frame
 
 ||| Objects consist of a class identifier, and a partial mapping from
 ||| field identifier to values:
-data Object = MkObj ClassId (VMap FldId Value)
+Object: Type
+Object = (ClassId, VMap FldId Value)
 
 ||| Heaps, χ, are mappings from addresses to objects:
 Heap: Type
@@ -153,6 +161,48 @@ Heap = VMap Addr Object
 ||| σ ::= ( ψ, χ ).-}
 Configuration: Type
 Configuration = (Stack, Heap)
+
+{-
+DEFINITION 19 (INTERPRETATIONS). We first define lookup of fields and
+classes, where α is an address, and f is a field identifier:
+
+• χ (α, f) ≜ fldMap(α, f) if χ (α) = (_, fldMap).
+• Class(α)χ ≜ C if χ (α) = (C, _)
+-}
+
+interpField: Heap -> Addr -> FldId -> (Maybe Value)
+interpField chi alpha f =
+  case vlookup alpha chi of
+    Just (_, fldMap) => vlookup f fldMap
+    Nothing => Nothing
+
+interpClass: Heap -> Addr -> (Maybe ClassId)
+interpClass chi alpha =
+  case vlookup alpha chi of
+    Just (c, _) => Just c
+    Nothing => Nothing
+
+{-
+We now define interpretations as follows:
+
+• ⌊x⌋ϕ ≜ ϕ(x)
+• ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
+-}
+interpVar: Frame -> VarId -> (Maybe Value)
+interpVar (_, phi) x =
+  case vlookup x phi of
+    (Just v) => Just v
+    Nothing => Nothing
+
+interpFieldLookup: Frame -> Heap -> VarId -> FldId -> (Maybe Value)
+interpFieldLookup (_, phi) chi x f =
+  maybe_bind (vlookup x phi) (\v =>
+    case v of
+      (ValAddr a) =>maybe_bind (vlookup a chi) (\(_, fldMap) =>
+        maybe_bind (vlookup f fldMap) (\v => Just v)
+        )
+      _ => Nothing
+    )
 
 {-
 
