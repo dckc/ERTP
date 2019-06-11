@@ -33,6 +33,13 @@ infix 11 $?
 (Just a) $? f = f a
 Nothing $? f = Nothing
 
+infix 12 ..
+
+{- where the paper uses M;M' , we use M#M' -}
+infix 7 ~>
+infix 7 ~~>
+infix 11 #
+
 mutual
 
   ||| DEFINITION 15 (MODULES). We define Module as the set of mappings
@@ -60,23 +67,25 @@ mutual
   Stmts : Type
   Stmts = VecLen Stmt
 
-  ||| x.f:= x | x:= x.f | x:= x.m( x ) | @@TODO x:= new C ( x∗ ) | return x
-  data Stmt: Type where
-    FieldAssign: {x: VarId} -> {f:FldId} -> {v: VarId}
-      -> Stmt
-    AssignGet: {lhs: VarId} -> {x: VarId} -> {f: FldId}
-      -> Stmt
+  data FieldAccess = (..) VarId FldId
+  data Call = MkCall VarId FldId (VecLen VarId)
+
+  ||| x.f:= x | x:= x.f | x:= x.m( x* ) | x:= new C ( x∗ ) | return x
+  data Stmt = SetField FieldAccess VarId
+            | GetField VarId FieldAccess
+            | GetCall VarId Call
+            | GetNew VarId ClassId (VecLen VarId)
+            | Return VarId
 
   GhostDecl: Type
   GhostDecl = (FldId, (VMap VarId Expr))
 
-  data Expr = True | False | Null
-    | Var VarId | Eq Expr Expr
-    | If Expr Expr Expr
-    | Call Expr FldId (List Expr)
+  ||| e ::= true | false | null | x | e=e | if e then e else e | e.f( e∗)
+  data Expr = True | False | Null | Var VarId
+    | Eq Expr Expr | If Expr Expr Expr
+    | CallExpr Call
 
-  ||| we use metavariables as follows: x ∈ VarId f ∈ FldId m ∈ MethId
-  ||| C ∈ ClassId, and x includes this
+  ||| we use metavariables as follows: x ∈ VarId, and x includes this
   data VarId = VarI String | This
   Eq VarId where
    This == This = True
@@ -84,24 +93,24 @@ mutual
    _ == This = False
    (VarI a) == (VarI b) = a == b
 
+  ||| f ∈ FldId 
   record FldId where
     constructor FldI
     id: String
   Eq FldId where
     (FldI a) == (FldI b) = a == b
+  ||| m ∈ MethId
   record MethId where
     constructor MethI
     id: String
   Eq MethId where
     (MethI a) == (MethI b) = a == b
+  ||| C ∈ ClassId
   record ClassId where
     constructor ClassI
     id: String
   Eq ClassId where
     (ClassI a) == (ClassI b) = a == b
-
-  lc: Module -> ClassId -> Maybe ClassDescr
-  lc mod cid = vlookup cid mod
 
   ||| lookup M(M, C, m)
   bigM: Module -> ClassId -> MethId -> Maybe MethDecl
@@ -137,14 +146,15 @@ data Value = ValNull | ValAddr Addr | P (Set Addr)
 ||| Continuations are either statements (as defined in Definition 16)
 ||| or a marker, x:= •, for a nested call followed by statements to be
 ||| executed once the call returns.
-
 data Continuation = Cont Stmts | NestedCall VarId Stmts
 
 data CodeStub {- @@ISSUE: where is this defined??? -}
 
 ||| Frames, ϕ, consist of a code stub and a mapping from identifiers to values:
-Frame: Type
-Frame = (CodeStub, VMap VarId Value)
+record Frame where
+  constructor MkFrame
+  contn: CodeStub
+  varMap: VMap VarId Value
 
 
 ||| Stacks, ψ, are sequences of frames, ψ ::= ϕ | ϕ · ψ.
@@ -180,24 +190,44 @@ Class: Addr -> Heap -> (Maybe ClassId)
 Class alpha chi = chi .@ alpha $? \(c, _) => Just c
 
 
-infix 12 ..
-data FieldAccess = (..) VarId FldId
 infix 11 //
 infix 11 ///
+
 data VarInterp = VI VarId
 data Interp = (//) VarId Frame | (///) FieldAccess (Frame, Heap)
-
 
 |||We now define interpretations as follows:
 ||| ⌊x⌋ϕ ≜ ϕ(x)
 ||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
 interp: Interp -> (Maybe Value)
-interp (x // (_, phi)) = phi .@ x
-interp ((x .. f) /// ((_, phi), chi)) =
-  phi .@ x $? \v =>
+interp (x // phi) = (varMap phi) .@ x
+interp ((x .. f) /// (phi, chi)) =
+  (varMap phi) .@ x $? \v =>
     case v of
       (ValAddr a) => chi .@ a $? \(_, fldMap) => fldMap .@ f
       _ => Nothing
+
+{-
+Operational Semantics
+
+methCall_OS
+
+ϕ.contn = x:= x0.m( x1, ...xn) ; Stmts
+⌊x0⌋ϕ = α
+M(M, Class(α)χ , m) = m( p1, . . . pn) { Stmts1}
+ϕ′′ = ( Stmts1, ( this 7→ α, p1 7→ ⌊x1⌋ϕ, . . . pn 7→ ⌊xn⌋ϕ ) )
+---
+M, ( ϕ · ψ, χ ) ❀ ( ϕ′′ · ϕ[contn 7→ x:= • ; Stmts] · ψ, χ )
+-}
+
+data (~>): (Module, (Stack, Heap)) -> (Stack, Heap) -> Type where
+  MethCall_OS:
+     (m: Module)
+     -> (phi, phi'': Frame)
+     -> (ns: Nat) -> (psi: Vect ns Frame)
+     -> (chi: Heap)
+     -> (m, (((S ns) ** phi :: psi), chi)) ~> (((S ns) ** phi'' :: psi), chi)
+
 
 {-
 
@@ -216,18 +246,13 @@ data ModulePair: Type where
   Semi: (M: Module) -> (M': Module) -> ModulePair
 
 
-infix 7 ~>
-
-{- where the paper uses M;M' , we use M#M' -}
-infix 11 #
-
 data ModuleContext: Type where
   (#): Module -> Module -> ModuleContext
 
 data ConfigInContext = (/) ModuleContext Configuration
 
 {- Execution -}
-data (~>): ConfigInContext -> Configuration -> Type where
+data (~~>): ConfigInContext -> Configuration -> Type where
   TwoModuleExecution: (sigma, sigma': Configuration)
            -> (m, m': Module)
            -> (n: Nat)
@@ -235,7 +260,7 @@ data (~>): ConfigInContext -> Configuration -> Type where
            -> sigma = head sigmas
            -> sigma' = last sigmas
            {- @@@ -> ({i :Fin n} -> Vect.index i sigmas) -}
-           -> m # m' / sigma ~> sigma'
+           -> m # m' / sigma ~~> sigma'
 
 -- Local Variables:
 -- idris-load-packages: ("contrib")
