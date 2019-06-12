@@ -19,6 +19,11 @@ infix 8 :==>
 (:==>): (k: Type) -> (v: Type) -> Type
 (:==>) k v = Seq (k, v)
 
+{-
+IDEA: use side conditions (proofs) of IsJust (lookup k kvs) to get v.
+I can't seem to get it to work.
+-}
+
 infix 12 .@
 ||| Where the paper writes `m(k)` we write `m .@ k`. Since `m(k)` may
 ||| be undefined, we return `Maybe v`
@@ -56,9 +61,7 @@ mutual
   ||| declarations, method declarations, and ghostfield declarations.
   data ClassDescr: Type where
     ClassDef: ClassId
-              -> (Seq FieldDecl)
-              -> (Seq MethDecl)
-              -> (Seq GhostDecl)
+              -> (Seq FieldDecl) -> (Seq MethDecl) -> (Seq GhostDecl)
               -> ClassDescr
  
   FieldDecl: Type
@@ -71,8 +74,10 @@ mutual
   Stmts = Seq Stmt
 
   infix 12 ..
-
+  ||| (we write `x .. f` for `x.f`)
   data FieldAccess = (..) VarId FldId
+
+  ||| x.m(x*)
   data Call = MkCall VarId MethId (Seq VarId)
 
   ||| x.f:= x | x:= x.f | x:= x.m( x* ) | x:= new C ( x∗ ) | return x
@@ -104,12 +109,14 @@ mutual
     id: String
   Eq FldId where
     (FldI a) == (FldI b) = a == b
+
   ||| m ∈ MethId
   record MethId where
     constructor MethI
     id: String
   Eq MethId where
     (MethI a) == (MethI b) = a == b
+
   ||| C ∈ ClassId
   record ClassId where
     constructor ClassI
@@ -117,7 +124,8 @@ mutual
   Eq ClassId where
     (ClassI a) == (ClassI b) = a == b
 
-  ||| lookup M(M, C, m)
+  ||| DEFINITION 17 (Lookup)
+  ||| M(M, C, m)
   bigM: Module -> ClassId -> MethId -> Maybe MethDecl
   bigM mod cid mid = mod .@ cid $?
     \(ClassDef _ _ methods _) =>
@@ -157,12 +165,20 @@ data Continuation = Cont Stmts | NestedCall VarId Stmts
 Frame: Type
 Frame = (Continuation, VarId :==> Value)
 
+implicit locals: Frame -> (VarId :==> Value)
+locals (_, varMap) = varMap
+
+infix 10 :*:
 ||| Stacks, ψ, are sequences of frames, ψ ::= ϕ | ϕ · ψ.
-Stack: Type
-Stack = Seq Frame
+data Stack = One Frame | (:*:) Frame Stack
 
 implicit asStack: Frame -> Stack
-asStack f = [f]
+asStack f = One f
+
+infix 9 :++:
+(:++:): Stack -> Stack -> Stack
+(:++:) (One f) b = f :*: b
+(:++:) (f :*: a) b = f :*: (a :++: b)
 
 ||| Objects consist of a class identifier, and a partial mapping from
 ||| field identifier to values:
@@ -174,16 +190,14 @@ Heap: Type
 Heap = Addr :==> Object
 
 ||| Runtime configurations, σ, are pairs of stacks and heaps,
-||| σ ::= ( ψ, χ ).-}
+||| σ ::= ( ψ, χ ).
 Configuration: Type
 Configuration = (Stack, Heap)
 
-{-
-DEFINITION 19 (INTERPRETATIONS). We first define lookup of fields and
-classes, where α is an address, and f is a field identifier:
--}
-
 infix 12 ..@
+||| DEFINITION 19 (INTERPRETATIONS). We first define lookup of fields and
+||| classes, where α is an address, and f is a field identifier:
+|||
 ||| χ (α, f) ≜ fldMap(α, f) if χ (α) = (_, fldMap).
 (..@): Heap -> (Addr, FldId) -> (Maybe Value)
 chi ..@ (a, f) = chi .@ a $? \(_, fldMap) => lookup f fldMap
@@ -197,21 +211,31 @@ infix 11 //
 infix 11 ///
 
 data VarInterp = VI VarId
-data Interp = (//) VarId Frame | (///) FieldAccess (Frame, Heap)
+data Interp = (//) VarId Frame
+     | (///) FieldAccess (Frame, Heap)
 
 |||We now define interpretations as follows:
 ||| ⌊x⌋ϕ ≜ ϕ(x)
 ||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
 interp: Interp -> (Maybe Value)
-interp (x // (_, varMap)) = varMap .@ x
+interp (x // phi) = phi .@ x
 interp ((x .. f) /// (phi, chi)) =
   (snd phi) .@ x $? \v =>
     case v of
       (ValAddr a) => chi .@ a $? \(_, fldMap) => fldMap .@ f
       _ => Nothing
 
-{-
+data Interp2 = VInConfig VarId Configuration
+             | FInConfig FieldAccess Configuration
+-- • ⌊x⌋(φ·ψ,χ) ≜⌊x⌋φ
+interp2 : Interp2 -> (Maybe Value)
+interp2 (VInConfig x (phi :*: psi, chi)) = interp $ x // phi
+interp2 (VInConfig _ _) = Nothing
+-- • ⌊x.f⌋(φ·ψ,χ) ≜ ⌊x.f⌋(φ,χ)
+interp2 (FInConfig (x .. f) (phi :*: psi, chi)) = interp $ (x .. f) /// (phi, chi)
+interp2 (FInConfig _ _) = Nothing
 
+{-
 DEFINITION 20 (LOOKUP AND UPDATE OF RUNTIME CONFIGURATIONS). We define
 convenient shorthands for looking up in runtime entities.
 -}
@@ -225,14 +249,17 @@ updateStub: Continuation -> Continuation -> Frame -> Frame
 updateStub contn stub' phi = (stub', snd phi)
 
 ||| We use φ[x 􏰀→ v] for updating the variable map, i.e. (stub,varMap[x 􏰀→ v]).
-varMapUpdate: VarId -> Value -> Frame -> Frame
-varMapUpdate x v (stub, varMap) = (stub, ((x, v) :: varMap))
+updateVarMap: VarId -> Value -> Frame -> Frame
+updateVarMap x v (stub, varMap) = (stub, ((x, v) :: varMap))
 
 ||| • Assuming a heap χ, a value v, and that χ(α) = (C, fieldMap), we
 ||| use χ[α,f 􏰀→ v] as a shorthand for updating the object, i.e.
 |||  χ[α􏰀→ (C, fieldMap[f 􏰀→ v]].
 heapUpdate: Addr -> FldId -> Value -> Heap -> Heap
-heapUpdate alpha f v chi = ?todo
+heapUpdate alpha f v chi = case chi .@ alpha of
+  Just (c, fieldMap) => (alpha, (c, (f, v) :: fieldMap)) :: chi
+  Nothing => chi
+
 
 pmap: {n: Nat}
       -> (p1n: (Vect n VarId)) -> (x1n: (Vect n VarId)) -> (phi: Frame) -> (Maybe (Vect n (VarId, Value)))
@@ -243,7 +270,7 @@ pmap {n=S k} (p1 :: p2n) (x1 :: x2n) phi =
     Nothing => Nothing
 
 newStack: Frame -> VarId -> Stmts -> Frame -> Stack -> Stack
-newStack phi'' x stmts (_, vm) psi = phi'' :: (((NestedCall x stmts), vm) :: psi)
+newStack phi'' x stmts (_, vm) psi = phi'' :*: (((NestedCall x stmts), vm) :*: psi)
 
 infix 7 ~>
 infix 7 ~>*
@@ -269,7 +296,7 @@ data (~>): (Module, (Stack, Heap)) -> (Stack, Heap) -> Type where
      -> interp (x0 // phi) = Just (ValAddr alpha)
      -> (Class alpha chi) = (Just cid) -> (bigM mm cid m) = Just (m, (p1n, stmts1))
      -> (pmap p1n x1n phi) = (Just m1n) -> phi'' = ((Cont stmts1), ((This, (ValAddr alpha)) :: m1n))
-     -> (mm, (phi :: psi, chi)) ~> (newStack phi'' x stmts phi psi, chi)
+     -> (mm, (phi :*: psi, chi)) ~> (newStack phi'' x stmts phi psi, chi)
 
 
 {-
@@ -296,14 +323,15 @@ smallest relation such that:
 • (φ · ψ · ψ ′, χ ) ⊑ (φ · ψ , χ )
 • (φ, χ[α 􏰀→ o) ⊑ (φ ·ψ, χ)
 • σ′ ⊑σ′′ andσ′′ ⊑σ implyσ′ ⊑σ
+
+@@TODO: alpha free in chi
 -}
-data Extends: Configuration -> Configuration -> Type where
-  ExtRefl: Extends sigma sigma
-  ExtVmap: Extends ((varMapUpdate x v phi) :: psi, chi)  (phi :: psi, chi)
-  -- stack
-  -- heap
-  ExtHeap: {phi: Frame} -> Extends (phi, (alpha, o) :: chi) (phi :: psi, chi)
-  ExtTrans: Extends sig' sig'' -> Extends sig'' sig -> Extends sig' sig
+data Extension: Configuration -> Configuration -> Type where
+  ExtRefl: Extension sigma sigma
+  ExtVmap: Extension ((updateVarMap x v phi) :*: psi, chi)  (phi :*: psi, chi)
+  ExtStack: Extension (phi :*: (psi :++: psi'), chi) (phi :*: psi, ch)
+  ExtHeap: {phi: Frame} -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
+  ExtTrans: Extension sig' sig'' -> Extension sig'' sig -> Extension sig' sig
 
 {-
 LEMMA A.1 (PRESERVATION OF INTERPRETATIONS AND EXECUTIONS). If σ′ ⊑ σ, then
@@ -312,6 +340,11 @@ LEMMA A.1 (PRESERVATION OF INTERPRETATIONS AND EXECUTIONS). If σ′ ⊑ σ, the
 • If Class(α)σ is defined, then Class(α)σ′ = Class(α)σ .
 • If M,σ Y∗ σ′′, then there exists a σ′′, so that M,σ′ Y∗ σ′′′ and σ′′′ ⊑ σ′′.
 -}
+lemmaA1: Extension sig' sig
+      -> ((IsJust $ interp2 $ (VInConfig x sig)) -> interp2 $ (VInConfig x sig') = interp2 $ (VInConfig x sig))
+lemmaA1 {sig'} {sig} extends defined = case sig' of
+  (phi :*: psi, chi) => interp $ x // phi = interp $ x // phi
+  {- @@ISSUE: is this really the case??? couldn't sig' assign a different value to x? -}
 
 {-
 
