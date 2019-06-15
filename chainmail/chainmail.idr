@@ -1,41 +1,17 @@
 module Chainmail
 
 import Data.Vect
+import Data.List
+import Data.List.Quantifiers as Q
+import Pruviloj
+import Pruviloj.Derive.DecEq
+
+import Notation
+import Modules
+
+%language ElabReflection
 
 %default total
-
-||| Finite sequences: where the paper has `phi | phi \middot psi`, we
-||| implicitly convert `phi` using `toSeq` and we write `phi :: psi`
-||| for adding an element.
-Seq: (a: Type) -> Type
-Seq = List
-
-implicit toSeq: (Vect n a) -> (Seq a)
-toSeq = toList
-
-infix 8 :==>
-||| Finite mappings: we use sequences of key, value pairs,
-||| assuming we never need to compare mappings for equality.
-(:==>): (k: Type) -> (v: Type) -> Type
-(:==>) k v = Seq (k, v)
-
-{-
-IDEA: use side conditions (proofs) of IsJust (lookup k kvs) to get v.
-I can't seem to get it to work.
--}
-
-infix 12 .@
-||| Where the paper writes `m(k)` we write `m .@ k`. Since `m(k)` may
-||| be undefined, we return `Maybe v`
-(.@): Eq k => (k :==> v) -> k -> (Maybe v)
-m .@ k = lookup k m
-
-infix 11 $?
-||| Where the paper has `f(m(k))`, since `m(k)` may be undefined
-||| (i.e. Nothing) we write `m .@ k ?: f`
-($?): (Maybe a) -> (a -> Maybe b) -> (Maybe b)
-(Just a) $? f = f a
-Nothing $? f = Nothing
 
 {-
 A THE UNDERLYING PROGRAMMING LANGUAGE, Loo
@@ -48,96 +24,6 @@ as classes, and modules are mappings from identifiers to class
 descriptions.
 -}
 
-mutual
-
-  ||| DEFINITION 15 (MODULES). We define Module as the set of mappings
-  ||| from identifiers to class descriptions (the latter defined in
-  |||
-  ||| Module ≜ { M | M : Identifier −> ClassDescr }
-  Module: Type
-  Module = ClassId :==> ClassDescr
-
-  ||| DEFINITION 16 (CLASSES). Class descriptions consist of field
-  ||| declarations, method declarations, and ghostfield declarations.
-  data ClassDescr: Type where
-    ClassDef: ClassId
-              -> (Seq FieldDecl) -> (Seq MethDecl) -> (Seq GhostDecl)
-              -> ClassDescr
- 
-  FieldDecl: Type
-  FieldDecl = FldId
-
-  MethDecl: Type
-  MethDecl = (MethId, (Seq VarId, Stmts))
-
-  Stmts : Type
-  Stmts = Seq Stmt
-
-  infix 12 ..
-  ||| (we write `x .. f` for `x.f`)
-  data FieldAccess = (..) VarId FldId
-
-  ||| x.m(x*)
-  data Call = MkCall VarId MethId (Seq VarId)
-
-  ||| x.f:= x | x:= x.f | x:= x.m( x* ) | x:= new C ( x∗ ) | return x
-  data Stmt = SetField FieldAccess VarId
-            | GetField VarId FieldAccess
-            | GetCall VarId Call
-            | GetNew VarId ClassId (Seq VarId)
-            | Return VarId
-
-  GhostDecl: Type
-  GhostDecl = (FldId, VarId :==> Expr)
-
-  ||| e ::= true | false | null | x | e=e | if e then e else e | e.f( e∗)
-  data Expr = True | False | Null | Var VarId
-    | Eq Expr Expr | If Expr Expr Expr
-    | CallExpr Call
-
-  ||| we use metavariables as follows: x ∈ VarId, and x includes this
-  data VarId = VarI String | This
-  Eq VarId where
-   This == This = True
-   This == _ = False
-   _ == This = False
-   (VarI a) == (VarI b) = a == b
-
-  ||| f ∈ FldId 
-  record FldId where
-    constructor FldI
-    id: String
-  Eq FldId where
-    (FldI a) == (FldI b) = a == b
-
-  ||| m ∈ MethId
-  record MethId where
-    constructor MethI
-    id: String
-  Eq MethId where
-    (MethI a) == (MethI b) = a == b
-
-  ||| C ∈ ClassId
-  record ClassId where
-    constructor ClassI
-    id: String
-  Eq ClassId where
-    (ClassI a) == (ClassI b) = a == b
-
-  ||| DEFINITION 17 (Lookup)
-  ||| M(M, C, m)
-  bigM: Module -> ClassId -> MethId -> Maybe MethDecl
-  bigM mod cid mid = mod .@ cid $?
-    \(ClassDef _ _ methods _) =>
-      methods .@ mid $?
-       \mdef => Just (mid, mdef)
-
-  bigG: Module -> ClassId -> FldId -> Maybe GhostDecl
-  bigG mod cid gid = mod .@ cid $?
-    \(ClassDef _ _ _ gs) =>
-      gs .@ gid $?
-       \gdef => Just (gid, gdef)
-
 {-
 DEFINITION 18 (RUNTIME ENTITIES). We define addresses, values, frames,
 stacks, heaps and runtime configurations.
@@ -148,6 +34,10 @@ stacks, heaps and runtime configurations.
 data Addr = MkAddr Nat
 Eq Addr where
   (MkAddr a) == (MkAddr b) = a == b
+decAddrEq : (x1, x2 : Addr) -> Dec (x1 = x2)
+%runElab (deriveDecEq `{decAddrEq})
+DecEq Addr where
+  decEq = decAddrEq
 
 Set: Type -> Type
 Set a = a -> (Dec a)
@@ -175,6 +65,10 @@ data Stack = One Frame | (:*:) Frame Stack
 implicit asStack: Frame -> Stack
 asStack f = One f
 
+implicit asList: Stack -> (List Frame)
+asList (One f) = [f]
+asList (f :*: s) = f :: s
+
 infix 9 :++:
 (:++:): Stack -> Stack -> Stack
 (:++:) (One f) b = f :*: b
@@ -200,7 +94,7 @@ infix 12 ..@
 |||
 ||| χ (α, f) ≜ fldMap(α, f) if χ (α) = (_, fldMap).
 (..@): Heap -> (Addr, FldId) -> (Maybe Value)
-chi ..@ (a, f) = chi .@ a $? \(_, fldMap) => lookup f fldMap
+chi ..@ (a, f) = chi .@ a $? \(_, fldMap) => fldMap .@ f
 
 ||| Class(α)χ ≜ C if χ (α) = (C, _)
 Class: Addr -> Heap -> (Maybe ClassId)
@@ -289,13 +183,13 @@ data (~>): (Module, (Stack, Heap)) -> (Stack, Heap) -> Type where
   MethCall_OS:
      {phi: Frame} -> {x, x0: VarId} -> {m: MethId} -> {n: Nat} -> {x1n: Vect n VarId} -> {stmts, stmts1: Stmts}
      -> {alpha: Addr}
-     -> {mm: Module} -> {chi: Heap} -> {p1n: Vect n VarId} 
+     -> {mm: Module} -> {chi: Heap} -> {p1n: Vect n VarId}
      -> (phi'': Frame)
      -> {psi: Stack}
-     -> (contn phi) = (Cont ((GetCall x (MkCall x0 m x1n)) :: stmts))
+     -> (contn phi) = (Cont ((GetCall x (MkCall x0 m $ toList x1n)) :: stmts))
      -> interp (x0 // phi) = Just (ValAddr alpha)
-     -> (Class alpha chi) = (Just cid) -> (bigM mm cid m) = Just (m, (p1n, stmts1))
-     -> (pmap p1n x1n phi) = (Just m1n) -> phi'' = ((Cont stmts1), ((This, (ValAddr alpha)) :: m1n))
+     -> (Class alpha chi) = (Just cid) -> (bigM mm cid m) = Just (m, (toList p1n, stmts1))
+     -> (pmap p1n x1n phi) = (Just m1n) -> phi'' = ((Cont stmts1), ((This, (ValAddr alpha)) :: (toList m1n)))
      -> (mm, (phi :*: psi, chi)) ~> (newStack phi'' x stmts phi psi, chi)
 
 
@@ -310,27 +204,38 @@ data (~>*): (Module, Configuration) -> Configuration -> Type where
   ExcRefl: (m, sigma) ~>* sigma
   ExcTrans: (m, sigma) ~>* sigma'' -> (m, sigma'') ~> sigma' -> (m, sigma) ~>* sigma'
 
-{-
 
-DEFINITION 22 (EXTENDING RUNTIME CONFIGURATIONS). The relation ⊑ is
-defined on runtime configurations as follows. Take arbitrary
-configurations σ , σ ′, σ ′′, frame φ, stacks ψ , ψ ′, heap χ ,
-address α free in χ , value v and object o, and define σ ⊑ σ ′ as the
-smallest relation such that:
+freeIn: (key: k) -> (k :==> v) -> Type
+freeIn k kvs = Not (Elem k (keys kvs))
+  where
+    keys: (a :==> b) -> (List a)
+    keys = map fst
 
-• σ⊑σ
-• (φ[x􏰀→v]·ψ,χ)⊑(φ·ψ,χ)
-• (φ · ψ · ψ ′, χ ) ⊑ (φ · ψ , χ )
-• (φ, χ[α 􏰀→ o) ⊑ (φ ·ψ, χ)
-• σ′ ⊑σ′′ andσ′′ ⊑σ implyσ′ ⊑σ
 
-@@TODO: alpha free in chi
--}
+
+||| DEFINITION 22 (EXTENDING RUNTIME CONFIGURATIONS). The relation ⊑ is
+||| defined on runtime configurations as follows. Take arbitrary
+||| configurations σ , σ ′, σ ′′, frame φ, stacks ψ , ψ ′, heap χ ,
+||| address α free in χ , value v and object o, and define σ ⊑ σ ′ as the
+||| smallest relation such that:
+|||
+||| • σ⊑σ
+||| • (φ[x􏰀→v]·ψ,χ)⊑(φ·ψ,χ)
+||| • (φ · ψ · ψ ′, χ ) ⊑ (φ · ψ , χ )
+||| • (φ, χ[α 􏰀→ o) ⊑ (φ ·ψ, χ)
+||| • σ′ ⊑σ′′ andσ′′ ⊑σ implyσ′ ⊑σ
 data Extension: Configuration -> Configuration -> Type where
   ExtRefl: Extension sigma sigma
-  ExtVmap: Extension ((updateVarMap x v phi) :*: psi, chi)  (phi :*: psi, chi)
-  ExtStack: Extension (phi :*: (psi :++: psi'), chi) (phi :*: psi, ch)
-  ExtHeap: {phi: Frame} -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
+  ExtVmap: (x: VarId) -> (v: Value) -> (phi: Frame)
+           -> (psi: Stack) -> (chi: Heap)
+           -> (ok: x `freeIn` (snd phi))
+           -> Extension ((updateVarMap x v phi) :*: psi, chi)
+                        (phi :*: psi, chi)
+  ExtStack: {psi: Stack} -> {auto ok: Q.All
+                                  (\phi_n => x `freeIn` (snd phi_n)) psi}
+            -> Extension (phi :*: (psi :++: psi'), chi) (phi :*: psi, ch)
+  ExtHeap: {phi: Frame} -> {auto ok: alpha `freeIn` chi}
+           -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
   ExtTrans: Extension sig' sig'' -> Extension sig'' sig -> Extension sig' sig
 
 {-
@@ -340,10 +245,20 @@ LEMMA A.1 (PRESERVATION OF INTERPRETATIONS AND EXECUTIONS). If σ′ ⊑ σ, the
 • If Class(α)σ is defined, then Class(α)σ′ = Class(α)σ .
 • If M,σ Y∗ σ′′, then there exists a σ′′, so that M,σ′ Y∗ σ′′′ and σ′′′ ⊑ σ′′.
 -}
-lemmaA1: Extension sig' sig
-      -> ((IsJust $ interp2 $ (VInConfig x sig)) -> interp2 $ (VInConfig x sig') = interp2 $ (VInConfig x sig))
-lemmaA1 {sig'} {sig} extends defined = case sig' of
-  (phi :*: psi, chi) => interp $ x // phi = interp $ x // phi
+lemmaA1: (Extension sig' sig)
+      -> ((IsJust $ interp2 $ (VInConfig x sig))
+      -> interp2 $ (VInConfig x sig') = interp2 $ (VInConfig x sig))
+lemmaA1 ExtRefl _ = Refl
+lemmaA1 (ExtVmap x v phi psi chi ok) defined =
+  interp2 $ (VInConfig x ((updateVarMap x v phi) :*: psi, chi)) =
+    (interp2 $ (phi :*: psi, chi))
+
+--
+{-@@@
+  (Extension (updated :*: psi, chi) (phi :*: psi, chi)) => Refl
+-}
+
+  -- (phi :*: psi, chi) => interp2 $ x // phi = interp2 $ x // phi
   {- @@ISSUE: is this really the case??? couldn't sig' assign a different value to x? -}
 
 {-
@@ -404,3 +319,7 @@ intString = show
 test : Int -> String
 test x = "Number " ++ x
 -}
+
+-- Local Variables:
+-- idris-load-packages: ("pruviloj")
+-- End:
