@@ -1,20 +1,20 @@
 { build-idris-package
 , fetchFromGitHub
+, contrib
 , effects
-, test
 , lib
 }:
 build-idris-package  {
   name = "containers";
-  version = "2017-09-10";
+  version = "2019-05-02";
 
-  idrisDeps = [ effects test ];
+  idrisDeps = [ effects contrib ];
 
   src = fetchFromGitHub {
-    owner = "jfdm";
+    owner = "dckc";
     repo = "idris-containers";
-    rev = "fb96aaa3f40faa432cd7a36d956dbc4fe9279234";
-    sha256 = "0vyjadd9sb8qcbzvzhnqwc8wa7ma770c10xhn96jsqsnzr81k52d";
+    rev = "2fada25";
+    sha256 = "1k8mjv81iia0d56rsjxig84q252raaiv3g1jk2jlz2z4p44lvq3c";
   };
 
   meta = {
