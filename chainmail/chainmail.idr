@@ -66,9 +66,10 @@ infix 10 :*:
 data Stack = One Frame | (:*:) Frame Stack
 
 VarEnv VarId Stack where
-  vars One = []
+  vars (One phi) = vars phi
   vars (phi :*: psi) = (vars phi) ++ (vars psi)
 
+-- ISSUE: subsume implicit with interfaces?
 implicit asStack: Frame -> Stack
 asStack f = One f
 
@@ -138,8 +139,8 @@ InterpContext FieldAccess (Frame, Heap) where
 ||| For ease of notation, we also use the shorthands below:
 ||| • ⌊x⌋(φ·ψ,χ) ≜⌊x⌋φ
 InterpContext VarId Configuration where
+  x // (One phi, chi) = x // phi
   x // (phi :*: psi, chi) = x // phi
-  x // _ = Nothing
 
 -- • ⌊x.f⌋(φ·ψ,χ) ≜ ⌊x.f⌋(φ,χ)
 InterpContext FieldAccess Configuration where
@@ -251,6 +252,13 @@ data Extension: Configuration -> Configuration -> Type where
            -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
   ExtTrans: Extension sig' sig'' -> Extension sig'' sig -> Extension sig' sig
 
+extDefined : {x: VarId} -> (ext: Extension sig' sig) -> (defined: IsJust (x // sig)) -> (IsJust (x // sig'))
+extDefined ExtRefl defined = defined
+extDefined (ExtVmap x v phi psi chi) defined = ?extDefined_vmap
+extDefined ExtStack defined = ?extDefined_stack
+extDefined ExtHeap defined = ?extDefined_heap
+extDefined (ExtTrans ext12 ext20) defined = ?extDefined_trans
+
 {-
 LEMMA A.1 (PRESERVATION OF INTERPRETATIONS AND EXECUTIONS). If σ′ ⊑ σ, then
 • If ⌊x⌋σ is defined, then ⌊x⌋σ ′ =⌊x⌋σ .
@@ -270,14 +278,15 @@ lemmaA1 {x} (ExtVmap x' v (cont, varMap) psi chi {xfree}) defined with (decEq x 
       x'bound = definedHasKey {env=varMap} sigx'
     in absurd $ xfree x'bound
   | No pfNeq = Refl
+lemmaA1 ExtStack defined = Refl
+lemmaA1 ExtHeap defined = Refl
+lemmaA1 {x} (ExtTrans ext12 ext20 {sig} {sig'} {sig''}) defined =
+  let
+    d20 = extDefined ext20 defined
+    eq20 = lemmaA1 {x} {sig'=sig''} {sig} ext20 ?d20
+    eq12 = lemmaA1 {x} {sig'} {sig=sig''} ext12 ?d12
+  in trans eq12 eq20
 
---
-{-@@@
-  (Extension (updated :*: psi, chi) (phi :*: psi, chi)) => Refl
--}
-
-  -- (phi :*: psi, chi) => interp2 $ x // phi = interp2 $ x // phi
-  {- @@ISSUE: is this really the case??? couldn't sig' assign a different value to x? -}
 
 {-
 
