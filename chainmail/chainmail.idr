@@ -55,12 +55,19 @@ data Continuation = Cont Stmts | NestedCall VarId Stmts
 Frame: Type
 Frame = (Continuation, VarId :==> Value)
 
+VarEnv VarId Frame where
+  vars (_, varMap) = vars varMap
+
 implicit locals: Frame -> (VarId :==> Value)
 locals (_, varMap) = varMap
 
 infix 10 :*:
 ||| Stacks, ψ, are sequences of frames, ψ ::= ϕ | ϕ · ψ.
 data Stack = One Frame | (:*:) Frame Stack
+
+VarEnv VarId Stack where
+  vars One = []
+  vars (phi :*: psi) = (vars phi) ++ (vars psi)
 
 implicit asStack: Frame -> Stack
 asStack f = One f
@@ -94,40 +101,52 @@ infix 12 ..@
 |||
 ||| χ (α, f) ≜ fldMap(α, f) if χ (α) = (_, fldMap).
 (..@): Heap -> (Addr, FldId) -> (Maybe Value)
-chi ..@ (a, f) = chi .@ a $? \(_, fldMap) => fldMap .@ f
+chi ..@ (a, f) =
+  do
+    (_, fldMap) <- chi .@ a
+    v <- fldMap .@ f
+    pure v
 
 ||| Class(α)χ ≜ C if χ (α) = (C, _)
 Class: Addr -> Heap -> (Maybe ClassId)
-Class alpha chi = chi .@ alpha $? \(c, _) => Just c
+Class alpha chi =
+  do
+    (c, _) <- chi .@ alpha
+    pure c
 
 
 infix 11 //
-infix 11 ///
 
-data VarInterp = VI VarId
-data Interp = (//) VarId Frame
-     | (///) FieldAccess (Frame, Heap)
+interface InterpContext t a where
+  (//) : t -> a -> Maybe Value
 
 |||We now define interpretations as follows:
 ||| ⌊x⌋ϕ ≜ ϕ(x)
-||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
-interp: Interp -> (Maybe Value)
-interp (x // phi) = phi .@ x
-interp ((x .. f) /// (phi, chi)) =
-  (snd phi) .@ x $? \v =>
-    case v of
-      (ValAddr a) => chi .@ a $? \(_, fldMap) => fldMap .@ f
-      _ => Nothing
+InterpContext VarId Frame where
+  x // phi = phi .@ x
 
-data Interp2 = VInConfig VarId Configuration
-             | FInConfig FieldAccess Configuration
--- • ⌊x⌋(φ·ψ,χ) ≜⌊x⌋φ
-interp2 : Interp2 -> (Maybe Value)
-interp2 (VInConfig x (phi :*: psi, chi)) = interp $ x // phi
-interp2 (VInConfig _ _) = Nothing
+||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
+InterpContext FieldAccess (Frame, Heap) where
+ (x .. f) // (phi, chi) =
+   do
+     (ValAddr a) <- (snd phi) .@ x
+     (_, fldMap) <- chi .@ a
+     v <- fldMap .@ f
+     pure v
+
+||| For ease of notation, we also use the shorthands below:
+||| • ⌊x⌋(φ·ψ,χ) ≜⌊x⌋φ
+InterpContext VarId Configuration where
+  x // (phi :*: psi, chi) = x // phi
+  x // _ = Nothing
+
 -- • ⌊x.f⌋(φ·ψ,χ) ≜ ⌊x.f⌋(φ,χ)
-interp2 (FInConfig (x .. f) (phi :*: psi, chi)) = interp $ (x .. f) /// (phi, chi)
-interp2 (FInConfig _ _) = Nothing
+InterpContext FieldAccess Configuration where
+  (x .. f) // (phi :*: psi, chi) = (x .. f) // (phi, chi)
+  (x .. f) // _ = Nothing
+
+||| • Class(α ) (ψ , χ ) ≜ Class(α ) χ
+||| • Class(x) σ ≜ Class(⌊x⌋ σ ) σ
 
 {-
 DEFINITION 20 (LOOKUP AND UPDATE OF RUNTIME CONFIGURATIONS). We define
@@ -160,7 +179,9 @@ pmap: {n: Nat}
 pmap {n=Z} [] [] phi = Just []
 pmap {n=S k} (p1 :: p2n) (x1 :: x2n) phi =
   case pmap {n=k} p2n x2n phi of
-    (Just m2n) => (interp (x1 // phi)) $? \v1 => Just ((p1, v1) :: m2n)
+    (Just m2n) => case (x1 // phi) of
+      Just v1 => Just ((p1, v1) :: m2n)
+      Nothing => Nothing
     Nothing => Nothing
 
 newStack: Frame -> VarId -> Stmts -> Frame -> Stack -> Stack
@@ -187,7 +208,7 @@ data (~>): (Module, (Stack, Heap)) -> (Stack, Heap) -> Type where
      -> (phi'': Frame)
      -> {psi: Stack}
      -> (contn phi) = (Cont ((GetCall x (MkCall x0 m $ toList x1n)) :: stmts))
-     -> interp (x0 // phi) = Just (ValAddr alpha)
+     -> (x0 // phi) = Just (ValAddr alpha)
      -> (Class alpha chi) = (Just cid) -> (bigM mm cid m) = Just (m, (toList p1n, stmts1))
      -> (pmap p1n x1n phi) = (Just m1n) -> phi'' = ((Cont stmts1), ((This, (ValAddr alpha)) :: (toList m1n)))
      -> (mm, (phi :*: psi, chi)) ~> (newStack phi'' x stmts phi psi, chi)
@@ -205,14 +226,6 @@ data (~>*): (Module, Configuration) -> Configuration -> Type where
   ExcTrans: (m, sigma) ~>* sigma'' -> (m, sigma'') ~> sigma' -> (m, sigma) ~>* sigma'
 
 
-freeIn: (key: k) -> (k :==> v) -> Type
-freeIn k kvs = Not (Elem k (keys kvs))
-  where
-    keys: (a :==> b) -> (List a)
-    keys = map fst
-
-
-
 ||| DEFINITION 22 (EXTENDING RUNTIME CONFIGURATIONS). The relation ⊑ is
 ||| defined on runtime configurations as follows. Take arbitrary
 ||| configurations σ , σ ′, σ ′′, frame φ, stacks ψ , ψ ′, heap χ ,
@@ -228,11 +241,10 @@ data Extension: Configuration -> Configuration -> Type where
   ExtRefl: Extension sigma sigma
   ExtVmap: (x: VarId) -> (v: Value) -> (phi: Frame)
            -> (psi: Stack) -> (chi: Heap)
-           -> (ok: x `freeIn` (snd phi))
+           -> {auto ok: x `freeIn` phi}
            -> Extension ((updateVarMap x v phi) :*: psi, chi)
                         (phi :*: psi, chi)
-  ExtStack: {psi: Stack} -> {auto ok: Q.All
-                                  (\phi_n => x `freeIn` (snd phi_n)) psi}
+  ExtStack: {psi: Stack}
             -> Extension (phi :*: (psi :++: psi'), chi) (phi :*: psi, ch)
   ExtHeap: {phi: Frame} -> {auto ok: alpha `freeIn` chi}
            -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
@@ -245,13 +257,16 @@ LEMMA A.1 (PRESERVATION OF INTERPRETATIONS AND EXECUTIONS). If σ′ ⊑ σ, the
 • If Class(α)σ is defined, then Class(α)σ′ = Class(α)σ .
 • If M,σ Y∗ σ′′, then there exists a σ′′, so that M,σ′ Y∗ σ′′′ and σ′′′ ⊑ σ′′.
 -}
-lemmaA1: (Extension sig' sig)
-      -> ((IsJust $ interp2 $ (VInConfig x sig))
-      -> interp2 $ (VInConfig x sig') = interp2 $ (VInConfig x sig))
+lemmaA1: {x : VarId}
+      -> (Extension sig' sig)
+      -> ((IsJust $ (x // sig))
+      -> (x // sig') = (x // sig))
 lemmaA1 ExtRefl _ = Refl
-lemmaA1 (ExtVmap x v phi psi chi ok) defined =
-  interp2 $ (VInConfig x ((updateVarMap x v phi) :*: psi, chi)) =
+lemmaA1 (ExtVmap x' v phi psi chi {ok}) defined = ?halp
+{-
+    interp2 $ (VInConfig x ((updateVarMap x v phi) :*: psi, chi)) =
     (interp2 $ (phi :*: psi, chi))
+-}
 
 --
 {-@@@
@@ -289,7 +304,7 @@ data ConfigInContext = (/) ModuleContext Configuration
 data (~~>): ConfigInContext -> Configuration -> Type where
   TwoModuleExecution: (sigma, sigma': Configuration)
            -> (m, m': Module)
-           -> (sigmas: (Seq Configuration)) -> NonEmpty sigmas
+           -> (sigmas: (List Configuration)) -> NonEmpty sigmas
            -> sigma = head sigmas
            -> sigma' = last sigmas
            {- @@@ -> ({i :Fin n} -> Vect.index i sigmas) -}
@@ -321,5 +336,5 @@ test x = "Number " ++ x
 -}
 
 -- Local Variables:
--- idris-load-packages: ("pruviloj")
+-- idris-load-packages: ("pruviloj" "contrib")
 -- End:

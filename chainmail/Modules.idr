@@ -99,16 +99,18 @@ test = id
 ||| DEFINITION 17 (Lookup)
 ||| M(M, C, m)
 bigM: Module -> ClassId -> MethId -> Maybe MethDecl
-bigM mod cid mid = mod .@ cid $?
-  \(ClassDef _ _ methods _) =>
-    methods .@ mid $?
-     \mdef => Just (mid, mdef)
+bigM mod cid mid =
+  do
+    (ClassDef _ _ methods _) <- mod .@ cid
+    mdef <- methods .@ mid
+    pure (mid, mdef)
 
 bigG: Module -> ClassId -> FldId -> Maybe GhostDecl
-bigG mod cid gid = mod .@ cid $?
-  \(ClassDef _ _ _ gs) =>
-    gs .@ gid $?
-     \gdef => Just (gid, gdef)
+bigG mod cid gid =
+  do
+    (ClassDef _ _ _ gs) <- mod .@ cid
+    gdef <- gs .@ gid
+    pure (gid, gdef)
 
 
 
