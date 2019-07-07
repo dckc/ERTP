@@ -127,12 +127,13 @@ InterpContext VarId Frame where
 
 ||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
 InterpContext FieldAccess (Frame, Heap) where
- (x .. f) // (phi, chi) =
-   do
-     (ValAddr a) <- (snd phi) .@ x
-     (_, fldMap) <- chi .@ a
-     v <- fldMap .@ f
-     pure v
+ (x .. f) // (phi, chi) = (snd phi) .@ x `ifdef` \addr => case addr of
+   (ValAddr a) => chi .@ a `ifdef` \(_, fldMap) => fldMap .@ f
+   _ => Nothing
+ where
+   ifdef : (Maybe a) -> (a -> Maybe b) -> Maybe b
+   ifdef Nothing _ = Nothing
+   ifdef (Just x) f = (f x)
 
 ||| For ease of notation, we also use the shorthands below:
 ||| • ⌊x⌋(φ·ψ,χ) ≜⌊x⌋φ
@@ -241,12 +242,12 @@ data Extension: Configuration -> Configuration -> Type where
   ExtRefl: Extension sigma sigma
   ExtVmap: (x: VarId) -> (v: Value) -> (phi: Frame)
            -> (psi: Stack) -> (chi: Heap)
-           -> {auto ok: x `freeIn` phi}
+           -> {auto xfree: x `freeIn` phi}
            -> Extension ((updateVarMap x v phi) :*: psi, chi)
                         (phi :*: psi, chi)
   ExtStack: {psi: Stack}
             -> Extension (phi :*: (psi :++: psi'), chi) (phi :*: psi, ch)
-  ExtHeap: {phi: Frame} -> {auto ok: alpha `freeIn` chi}
+  ExtHeap: {phi: Frame} -> {auto afree: alpha `freeIn` chi}
            -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
   ExtTrans: Extension sig' sig'' -> Extension sig'' sig -> Extension sig' sig
 
@@ -262,11 +263,13 @@ lemmaA1: {x : VarId}
       -> ((IsJust $ (x // sig))
       -> (x // sig') = (x // sig))
 lemmaA1 ExtRefl _ = Refl
-lemmaA1 (ExtVmap x' v phi psi chi {ok}) defined = ?halp
-{-
-    interp2 $ (VInConfig x ((updateVarMap x v phi) :*: psi, chi)) =
-    (interp2 $ (phi :*: psi, chi))
--}
+lemmaA1 {x} (ExtVmap x' v (cont, varMap) psi chi {xfree}) defined with (decEq x x')
+  | Yes pfEq =
+    let
+      sigx' = replace {P=\t => IsJust $ varMap .@ t} pfEq defined
+      x'bound = definedHasKey {env=varMap} sigx'
+    in absurd $ xfree x'bound
+  | No pfNeq = Refl
 
 --
 {-@@@
