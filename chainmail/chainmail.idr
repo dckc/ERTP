@@ -128,7 +128,7 @@ InterpContext VarId Frame where
 
 ||| ⌊x.f⌋(ϕ, χ ) ≜ v, if χ (ϕ(x)) = (_, fldMap) and fldMap(f)=v
 InterpContext FieldAccess (Frame, Heap) where
- (x .. f) // (phi, chi) = (snd phi) .@ x `ifdef` \addr => case addr of
+ (x .. f) // (phi, chi) = (locals phi) .@ x `ifdef` \addr => case addr of
    (ValAddr a) => chi .@ a `ifdef` \(_, fldMap) => fldMap .@ f
    _ => Nothing
  where
@@ -161,11 +161,17 @@ contn (c, _) = c
 ||| • Assuming a value v, and that φ is the tuple (stub,varMap), we define
 ||| φ[contn 􏰀→ stub’] for updating the stub, i.e. (stub’,varMap).
 updateStub: Continuation -> Continuation -> Frame -> Frame
-updateStub contn stub' phi = (stub', snd phi)
+updateStub contn stub' phi = (stub', locals phi)
 
 ||| We use φ[x 􏰀→ v] for updating the variable map, i.e. (stub,varMap[x 􏰀→ v]).
 updateVarMap: VarId -> Value -> Frame -> Frame
 updateVarMap x v (stub, varMap) = (stub, ((x, v) :: varMap))
+
+
+prependSame : {x: VarId} -> {v: Value} -> {phi : Frame} ->
+  (x :: vars (locals phi)) = vars $ locals $ updateVarMap x v phi
+prependSame {phi = (_, [])} = Refl
+prependSame {phi = (_, (x0, v0) :: rest)} = Refl
 
 ||| • Assuming a heap χ, a value v, and that χ(α) = (C, fieldMap), we
 ||| use χ[α,f 􏰀→ v] as a shorthand for updating the object, i.e.
@@ -254,7 +260,15 @@ data Extension: Configuration -> Configuration -> Type where
 
 extDefined : {x: VarId} -> (ext: Extension sig' sig) -> (defined: IsJust (x // sig)) -> (IsJust (x // sig'))
 extDefined ExtRefl defined = defined
-extDefined (ExtVmap x v phi psi chi) defined = ?extDefined_vmap
+extDefined {x} (ExtVmap x' v' phi psi chi) defined =
+  let
+    hasKey = definedHasKey {env=locals phi} {key=x} defined
+    sameList = prependSame {phi} {x=x'} {v=v'}
+    l1 = There {y=x'} hasKey
+    h1 = keysDefined {key=x} {env=locals phi} hasKey
+    h2 = replace {P=\t => Elem x t} sameList l1
+  in
+    keysDefined {key=x} h2
 extDefined ExtStack defined = ?extDefined_stack
 extDefined ExtHeap defined = ?extDefined_heap
 extDefined (ExtTrans ext12 ext20) defined = ?extDefined_trans

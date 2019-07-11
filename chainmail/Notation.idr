@@ -62,12 +62,26 @@ definedHasKey {env} {key} defined = case env of
       Yes later => There later
       No notLater =>
         let
+          -- h1 : (env' .@ key) = Nothing
           h1 = freeMapsToNothing {env = env'} notLater
+          -- h2 : (((k0, v0) :: env') .@ key) = env' .@ key
           h2 = mapNeqRest {m'=env'} {v0} key k0 pfNeq
+          -- h3 : (((k0, v0) :: env') .@ key) = Nothing
           h3 = trans h2 h1
+          -- h4 : IsJust Nothing
           h4 = replace h3 defined
         in absurd h4
 
--- Local Variables:
+keysDefined : (DecEq k) => {key: k} -> {v: Type} -> {env: k :==> v} ->
+  (Elem key (vars env)) -> (IsJust (env .@ key))
+keysDefined {key} {env=[]} isElem = absurd isElem
+keysDefined {key} {env=(key, val) :: env'} Here with (decEq key key)
+  | Yes Refl = ItIsJust
+  | No contra = absurd $ contra Refl
+keysDefined {key = key} {env=(k0, v0) :: env'} (There later)
+  with (decEq key k0)
+    | Yes pfEq = ItIsJust
+    | No pfNeq = keysDefined later
+
 -- idris-load-packages: ("containers" "contrib")
 -- End:
