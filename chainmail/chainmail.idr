@@ -77,10 +77,11 @@ implicit asList: Stack -> (List Frame)
 asList (One f) = [f]
 asList (f :*: s) = f :: s
 
-infix 9 :++:
-(:++:): Stack -> Stack -> Stack
-(:++:) (One f) b = f :*: b
-(:++:) (f :*: a) b = f :*: (a :++: b)
+||| Stack cannot be empty so without neutral element represents a Semigroup
+||| with single binary operation that is associative
+Semigroup Stack where
+  (<+>) (One f)   b = f :*: b
+  (<+>) (f :*: a) b = f :*: (a <+> b)
 
 ||| Objects consist of a class identifier, and a partial mapping from
 ||| field identifier to values:
@@ -253,7 +254,7 @@ data Extension: Configuration -> Configuration -> Type where
            -> Extension ((updateVarMap x v phi) :*: psi, chi)
                         (phi :*: psi, chi)
   ExtStack: {psi: Stack}
-            -> Extension (phi :*: (psi :++: psi'), chi) (phi :*: psi, ch)
+            -> Extension (phi :*: (psi <+> psi'), chi) (phi :*: psi, ch)
   ExtHeap: {phi: Frame} -> {auto afree: alpha `freeIn` chi}
            -> Extension (phi, (alpha, o) :: chi) (phi :*: psi, chi)
   ExtTrans: Extension sig' sig'' -> Extension sig'' sig -> Extension sig' sig
